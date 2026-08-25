@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>會計師考試讀書規劃追蹤器</title>
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="讀書規劃追蹤器" />
+<meta name="theme-color" content="#f8fafc" />
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect fill='%232563eb' width='180' height='180'/><text x='50%' y='50%' font-size='80' fill='white' text-anchor='middle' dominant-baseline='middle'>📚</text></svg>" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html {
+    overflow-y: scroll;
+  }
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input, textarea, button {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .safe-area {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+</style>
+</head>
+<body class="bg-slate-50">
+<div id="root"></div>
+ 
+<script type="text/babel">
+const { useState, useMemo, useEffect } = React;
+ 
+/* ---------- localStorage 工具 ---------- */
+const STORAGE_KEY = 'cpa_study_planner_data_v2';
+ 
+function loadStorage(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return null;
+    return JSON.parse(raw);
+  }catch(e){
+    console.error('讀取本機資料失敗', e);
+    return null;
+  }
+}
+function saveStorage(data){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }catch(e){
+    console.error('儲存本機資料失敗', e);
+  }
+}
+ 
+/* ---------- 工具函式 ---------- */
+function pad2(n){ return n < 10 ? '0'+n : ''+n; }
+function toISO(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+function addDays(base, n){ const d = new Date(base); d.setDate(d.getDate()+n); return d; }
+function daysDiff(dateStr){
+  if(!dateStr) return null;
+  const target = new Date(dateStr+'T00:00:00');
+  const now = new Date(); now.setHours(0,0,0,0);
+  return Math.ceil((target - now) / (1000*60*60*24));
+}
+function formatDate(dateStr){
+  if(!dateStr) return '未設定';
+  const d = new Date(dateStr+'T00:00:00');
+  return d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate();
+}
+const COLORS = ['#2563eb','#dc2626','#059669','#d97706','#7c3aed','#db2777','#0891b2','#65a30d'];
+ 
+/* ---------- 預設示範資料 ---------- */
+function getDefaultData(){
+  const today = new Date();
+  const subjects = [
+    { id:1, name:'中級會計學', totalLessons:80, targetDate: toISO(addDays(today,60)) },
+    { id:2, name:'審計學', totalLessons:50, targetDate: toISO(addDays(today,45)) },
+    { id:3, name:'稅務法規', totalLessons:40, targetDate: toISO(addDays(today,35)) },
+  ];
+  const lessonRecords = [
+    { id:1, subjectId:1, lessonNumber:1, date: toISO(addDays(today,-13)), hours:2, note:'緒論、會計基本假設' },
+    { id:2, subjectId:1, lessonNumber:2, date: toISO(addDays(today,-11)), hours:2.5, note:'資產負債表項目' },
+    { id:3, subjectId:1, lessonNumber:3, date: toISO(addDays(today,-8)), hours:3, note:'第三章 存貨 開始' },
+    { id:4, subjectId:1, lessonNumber:4, date: toISO(addDays(today,-5)), hours:2, note:'第三章存貨完工，成本公式與LCM比較重要' },
+    { id:5, subjectId:1, lessonNumber:5, date: toISO(addDays(today,-2)), hours:2, note:'存貨習題演練' },
+    { id:6, subjectId:2, lessonNumber:1, date: toISO(addDays(today,-12)), hours:1.5, note:'審計概論' },
+    { id:7, subjectId:2, lessonNumber:2, date: toISO(addDays(today,-7)), hours:2, note:'內部控制' },
+    { id:8, subjectId:3, lessonNumber:1, date: toISO(addDays(today,-10)), hours:1, note:'稅法總則' },
+    { id:9, subjectId:4, lessonNumber:1, date: toISO(addDays(today,-9)), hours:2, note:'財管概論' },
+  ];
+  return {
+    examDate: toISO(addDays(today, 90)),
+    subjects,
+    lessonRecords,
+    nextSubjectId: 5,
+    nextLessonRecordId: 10,
+  };
+}
+ 
+/* ---------- 簡易 UI 元件 ---------- */
+function Card({children, className}){
+  return <div className={"bg-white rounded-xl border border-slate-200 shadow-sm " + (className||'')}>{children}</div>;
+}
+function CardHeader({children}){ return <div className="p-5 pb-2">{children}</div>; }
+function CardTitle({children}){ return <h3 className="font-semibold text-base text-slate-800">{children}</h3>; }
+function CardDescription({children}){ return <p className="text-sm text-slate-500 mt-1">{children}</p>; }
+function CardContent({children}){ return <div className="p-5 pt-3">{children}</div>; }
+ 
+function Button({children, onClick, className, variant}){
+  const base = "inline-flex items-center justify-center gap-1 rounded-lg text-sm font-medium px-4 py-2 transition ";
+  const style = variant==='ghost' ? "bg-transparent hover:bg-slate-100 text-slate-500"
+              : variant==='destructive' ? "bg-red-600 text-white hover:bg-red-700"
+              : "bg-blue-600 text-white hover:bg-blue-700";
+  return <button onClick={onClick} className={base+style+' '+(className||'')}>{children}</button>;
+}
+function Input(props){
+  return <input {...props} className={"w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 "+(props.className||'')} />;
+}
+function Label({children}){ return <label className="text-sm font-medium text-slate-600 block mb-1">{children}</label>; }
+function Badge({children, className}){
+  return <span className={"text-xs font-medium px-2 py-1 rounded-full inline-flex items-center gap-1 "+(className||'bg-slate-100 text-slate-600')}>{children}</span>;
+}
+function ProgressBar({value}){
+  return (
+    <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+      <div className="h-full bg-blue-600 rounded-full transition-all" style={{width: value+'%'}} />
+    </div>
+  );
+}
+ 
+/* ---------- 圖表（純 SVG） ---------- */
+function LineChartSVG({data, height=220, color='#2563eb'}){
+  if(!data.length) return <div className="text-sm text-slate-400 text-center py-10">尚無資料</div>;
+  const width = 700, padding = 32;
+  const innerW = width - padding*2, innerH = height - padding*2;
+  const max = Math.max(...data.map(d=>d.hours), 1);
+  const stepX = data.length>1 ? innerW/(data.length-1) : 0;
+  const points = data.map((d,i)=>({
+    x: padding + i*stepX,
+    y: padding + innerH - (d.hours/max)*innerH,
+    ...d
+  }));
+  const pathD = points.map((p,i)=> (i===0?'M':'L')+p.x+','+p.y).join(' ');
+  const labelEvery = Math.max(1, Math.ceil(points.length/8));
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
+      {[0,0.25,0.5,0.75,1].map((t,i)=>{
+        const y = padding + innerH*(1-t);
+        return <line key={i} x1={padding} x2={width-padding} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />;
+      })}
+      <path d={pathD} fill="none" stroke={color} strokeWidth="2" />
+      {points.map((p,i)=>(
+        <circle key={i} cx={p.x} cy={p.y} r="3" fill={color} />
+      ))}
+      {points.map((p,i)=> i % labelEvery === 0 ? (
+        <text key={'t'+i} x={p.x} y={height-8} fontSize="10" textAnchor="middle" fill="#64748b">{p.date}</text>
+      ) : null)}
+    </svg>
+  );
+}
+function SubjectBarList({data, colors}){
+  const max = Math.max(...data.map(d=>d.value), 1);
+  if(!data.length) return <div className="text-sm text-slate-400 text-center py-10">尚無資料</div>;
+  return (
+    <div className="space-y-3">
+      {data.map((d,i)=>(
+        <div key={i}>
+          <div className="flex justify-between text-sm mb-1"><span>{d.name}</span><span className="text-slate-500">{d.value} 小時</span></div>
+          <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full rounded-full" style={{width: (d.value/max*100)+'%', backgroundColor: colors[i%colors.length]}} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+function PieChartSVG({data, colors, size=200}){
+  const total = data.reduce((a,d)=>a+d.value,0) || 1;
+  if(!data.length || total===0) return <div className="text-sm text-slate-400 text-center py-10">尚無資料</div>;
+  let cumulative = 0;
+  const radius = size/2, cx = radius, cy = radius;
+  const slices = data.map((d,i)=>{
+    const startAngle = (cumulative/total)*2*Math.PI;
+    cumulative += d.value;
+    const endAngle = (cumulative/total)*2*Math.PI;
+    const x1 = cx + radius*Math.sin(startAngle), y1 = cy - radius*Math.cos(startAngle);
+    const x2 = cx + radius*Math.sin(endAngle), y2 = cy - radius*Math.cos(endAngle);
+    const largeArc = endAngle-startAngle > Math.PI ? 1 : 0;
+    const path = `M${cx},${cy} L${x1},${y1} A${radius},${radius} 0 ${largeArc} 1 ${x2},${y2} Z`;
+    return { path, color: colors[i%colors.length], name: d.name, percent: Math.round(d.value/total*100) };
+  });
+  return (
+    <div className="flex flex-col md:flex-row items-center gap-6">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {slices.map((s,i)=><path key={i} d={s.path} fill={s.color} stroke="white" strokeWidth="1" />)}
+      </svg>
+      <div className="space-y-1">
+        {slices.map((s,i)=>(
+          <div key={i} className="flex items-center gap-2 text-sm">
+            <span className="w-3 h-3 rounded-full inline-block" style={{backgroundColor:s.color}} />
+            <span>{s.name}</span><span className="text-slate-500">{s.percent}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+ 
+/* ---------- 讀書堂數彈出視窗 ---------- */
+function LessonModal({subject, lessonNumber, record, onClose, onSave, onRemove}){
+  const [date, setDate] = useState(record ? record.date : toISO(new Date()));
+  const [hours, setHours] = useState(record ? String(record.hours != null ? record.hours : '') : '');
+  const [note, setNote] = useState(record ? (record.note || '') : '');
+ 
+  const handleSave = () => {
+    if(!date) return;
+    onSave({ date, hours: Number(hours)||0, note: note.trim() });
+    onClose();
+  };
+  const handleRemove = () => {
+    if(!window.confirm('確定要取消這一堂的完成紀錄嗎？')) return;
+    onRemove();
+    onClose();
+  };
+ 
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6" onClick={e=>e.stopPropagation()}>
+        <h3 className="font-semibold text-lg text-slate-800 mb-1">{subject.name}</h3>
+        <p className="text-sm text-slate-500 mb-4">第 {lessonNumber} 堂課</p>
+        <div className="space-y-3">
+          <div>
+            <Label>上課日期</Label>
+            <Input type="date" value={date} onChange={e=>setDate(e.target.value)} />
+          </div>
+          <div>
+            <Label>讀書時數（選填）</Label>
+            <Input type="number" step="0.5" min="0" placeholder="例如：2" value={hours} onChange={e=>setHours(e.target.value)} />
+          </div>
+          <div>
+            <Label>備註（選填）</Label>
+            <textarea
+              value={note}
+              onChange={e=>setNote(e.target.value)}
+              rows="3"
+              placeholder="例如：第三章存貨完工，成本公式與LCM比較重要"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
+          </div>
+        </div>
+        <div className="flex items-center justify-between mt-5 gap-2 flex-wrap">
+          <div>
+            {record && <Button variant="ghost" onClick={handleRemove} className="text-red-500 hover:bg-red-50 text-xs px-2 py-1">取消完成</Button>}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose} className="text-xs px-2 py-1">取消</Button>
+            <Button onClick={handleSave} className="text-xs px-2 py-1">{record ? '儲存修改' : '標記完成'}</Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+ 
+/* ---------- 集點卡區塊 ---------- */
+function PointCardSection({subject, records, expanded, onToggleExpand, onCellClick}){
+  const completedMap = useMemo(() => {
+    const m = new Map();
+    records.forEach(r => m.set(r.lessonNumber, r));
+    return m;
+  }, [records]);
+  const completedCount = records.length;
+  const percent = subject.totalLessons > 0 ? Math.min(100, Math.round(completedCount/subject.totalLessons*100)) : 0;
+ 
+  return (
+    <Card>
+      <CardContent>
+        <div className="flex flex-wrap items-center justify-between gap-2 cursor-pointer select-none" onClick={onToggleExpand}>
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-600">📖</span>
+            <h3 className="font-semibold text-sm md:text-base text-slate-800">{subject.name}</h3>
+          </div>
+          <div className="flex items-center gap-2 md:gap-4 text-xs md:text-sm flex-wrap">
+            <span className="text-slate-600">完成度 <b className="text-emerald-600">{percent}%</b></span>
+            <span className="text-slate-400">{expanded ? '▲' : '▼'}</span>
+          </div>
+        </div>
+ 
+        {expanded && (
+          <div className="flex flex-wrap gap-2 mt-4">
+            {Array.from({length: subject.totalLessons}, (_, idx) => idx + 1).map(n => {
+              const rec = completedMap.get(n);
+              return (
+                <div key={n} className="relative group">
+                  <button
+                    onClick={() => onCellClick(subject.id, n)}
+                    className={
+                      "w-10 h-10 rounded-lg flex flex-col items-center justify-center text-xs transition " +
+                      (rec
+                        ? "bg-emerald-500 text-white hover:brightness-110 shadow-sm"
+                        : "bg-white border border-slate-200 text-slate-400 hover:border-blue-400 hover:text-blue-500")
+                    }
+                  >
+                    {rec ? (
+                      <React.Fragment>
+                        <span className="text-base leading-none">✓</span>
+                        <span className="text-[11px] font-medium mt-0.5">L{n}</span>
+                      </React.Fragment>
+                    ) : (
+                      <React.Fragment>
+                        <span className="text-sm font-semibold">{n}</span>
+                        <span className="text-[10px]">堂</span>
+                      </React.Fragment>
+                    )}
+                  </button>
+                  {rec && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-44 bg-white border border-slate-200 shadow-lg rounded-lg p-2 text-xs opacity-0 group-hover:opacity-100 pointer-events-none transition z-20">
+                      <div className="font-semibold text-emerald-600">第 {n} 堂課・{formatDate(rec.date)}</div>
+                      <div className="mt-1 text-slate-500">{rec.note || '（無備註）'}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+ 
+/* ---------- 主程式 ---------- */
+function App(){
+  const today = new Date();
+  const todayISO = toISO(today);
+ 
+  const initial = useMemo(() => loadStorage() || getDefaultData(), []);
+ 
+  const [examDate, setExamDate] = useState(initial.examDate);
+  const [subjects, setSubjects] = useState(initial.subjects);
+  const [lessonRecords, setLessonRecords] = useState(initial.lessonRecords);
+  const [nextSubjectId, setNextSubjectId] = useState(initial.nextSubjectId);
+  const [nextLessonRecordId, setNextLessonRecordId] = useState(initial.nextLessonRecordId);
+  const [collapsedIds, setCollapsedIds] = useState(() =>
+    new Set(initial.subjects.map(s => s.id))
+  );
+  const [savedTick, setSavedTick] = useState(null);
+ 
+  useEffect(() => {
+    saveStorage({ examDate, subjects, lessonRecords, nextSubjectId, nextLessonRecordId });
+    setSavedTick(new Date());
+  }, [examDate, subjects, lessonRecords, nextSubjectId, nextLessonRecordId]);
+ 
+  const resetAllData = () => {
+    if(!window.confirm('確定要清除所有資料並重置為示範資料嗎？此動作無法復原。')) return;
+    const def = getDefaultData();
+    setExamDate(def.examDate);
+    setSubjects(def.subjects);
+    setLessonRecords(def.lessonRecords);
+    setNextSubjectId(def.nextSubjectId);
+    setNextLessonRecordId(def.nextLessonRecordId);
+    setCollapsedIds(new Set(def.subjects.map(s => s.id)));
+  };
+ 
+  /* ---- 科目 新增/編輯 表單 ---- */
+  const [editingSubjectId, setEditingSubjectId] = useState(null);
+  const [subjectName, setSubjectName] = useState('');
+  const [subjectTotal, setSubjectTotal] = useState('');
+  const [subjectTarget, setSubjectTarget] = useState('');
+ 
+  const startEditSubject = (s) => {
+    setEditingSubjectId(s.id);
+    setSubjectName(s.name);
+    setSubjectTotal(String(s.totalLessons));
+    setSubjectTarget(s.targetDate || '');
+  };
+  const cancelEditSubject = () => {
+    setEditingSubjectId(null);
+    setSubjectName(''); setSubjectTotal(''); setSubjectTarget('');
+  };
+  const submitSubjectForm = () => {
+    if(!subjectName.trim() || !subjectTotal || Number(subjectTotal) <= 0) return;
+    if(editingSubjectId){
+      setSubjects(prev => prev.map(s => s.id === editingSubjectId
+        ? { ...s, name: subjectName.trim(), totalLessons: Number(subjectTotal), targetDate: subjectTarget }
+        : s));
+      setEditingSubjectId(null);
+    } else {
+      setSubjects(prev => [...prev, { id: nextSubjectId, name: subjectName.trim(), totalLessons: Number(subjectTotal), targetDate: subjectTarget }]);
+      setNextSubjectId(id => id + 1);
+    }
+    setSubjectName(''); setSubjectTotal(''); setSubjectTarget('');
+  };
+  const deleteSubject = (id) => {
+    if(!window.confirm('確定要刪除此科目嗎？相關讀書紀錄也會一併刪除。')) return;
+    setSubjects(prev => prev.filter(s => s.id !== id));
+    setLessonRecords(prev => prev.filter(r => r.subjectId !== id));
+    if(editingSubjectId === id) cancelEditSubject();
+  };
+ 
+  /* ---- 集點卡 展開/收合 ---- */
+  const toggleExpand = (id) => {
+    setCollapsedIds(prev => {
+      const next = new Set(prev);
+      if(next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+ 
+  /* ---- 讀書堂數 彈出視窗 ---- */
+  const [modalCell, setModalCell] = useState(null);
+ 
+  const saveLessonRecord = (subjectId, lessonNumber, data) => {
+    setLessonRecords(prev => {
+      const exists = prev.find(r => r.subjectId === subjectId && r.lessonNumber === lessonNumber);
+      if(exists){
+        return prev.map(r => (r.subjectId === subjectId && r.lessonNumber === lessonNumber) ? { ...r, ...data } : r);
+      }
+      const newRecord = { id: nextLessonRecordId, subjectId, lessonNumber, ...data };
+      setNextLessonRecordId(id => id + 1);
+      return [...prev, newRecord];
+    });
+  };
+  const removeLessonRecord = (subjectId, lessonNumber) => {
+    setLessonRecords(prev => prev.filter(r => !(r.subjectId === subjectId && r.lessonNumber === lessonNumber)));
+  };
+ 
+  /* ---- 統計計算 ---- */
+  const subjectStats = useMemo(() => {
+    return subjects.map(s => {
+      const records = lessonRecords.filter(r => r.subjectId === s.id);
+      const completedLessons = records.length;
+      const hours = records.reduce((a, r) => a + (r.hours || 0), 0);
+      const remaining = Math.max(s.totalLessons - completedLessons, 0);
+      const percent = s.totalLessons > 0 ? Math.min(100, Math.round(completedLessons/s.totalLessons*100)) : 0;
+      let dLeft = null, lessonsPerWeek = null;
+      if(s.targetDate){
+        dLeft = daysDiff(s.targetDate);
+        if(dLeft > 0){
+          const weeksLeft = dLeft/7;
+          lessonsPerWeek = remaining === 0 ? 0 : Math.ceil(remaining/weeksLeft);
+        } else {
+          lessonsPerWeek = remaining > 0 ? -1 : 0;
+        }
+      }
+      return { ...s, records, completedLessons, hours, remaining, percent, daysLeft: dLeft, lessonsPerWeek };
+    });
+  }, [subjects, lessonRecords]);
+ 
+  const totalHours = useMemo(() => lessonRecords.reduce((a, r) => a + (r.hours || 0), 0), [lessonRecords]);
+  const totalStudyDays = useMemo(() => new Set(lessonRecords.map(r => r.date)).size, [lessonRecords]);
+  const avgLast7 = useMemo(() => {
+    const threshold = toISO(addDays(today, -6));
+    const sum = lessonRecords.filter(r => r.date >= threshold && r.date <= todayISO).reduce((a, r) => a + (r.hours || 0), 0);
+    return sum/7;
+  }, [lessonRecords]);
+ 
+  const examDaysLeft = daysDiff(examDate);
+  const pieData = useMemo(() => subjectStats.map(s => ({ name: s.name, value: Math.round(s.hours*10)/10 })), [subjectStats]);
+  const dailyTrend = useMemo(() => {
+    const map = {};
+    lessonRecords.forEach(r => { map[r.date] = (map[r.date]||0) + (r.hours||0); });
+    return Object.keys(map).sort().slice(-30).map(d => ({ date: d.slice(5), hours: Math.round(map[d]*10)/10 }));
+  }, [lessonRecords]);
+ 
+  const examColor = examDaysLeft===null ? 'text-slate-500' : examDaysLeft<=30 ? 'text-red-600' : examDaysLeft<=60 ? 'text-amber-600' : 'text-emerald-600';
+ 
+  const [activeTab, setActiveTab] = useState('subjects');
+ 
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8 safe-area">
+      <div className="max-w-6xl mx-auto space-y-6">
+        <div className="flex items-start justify-between flex-wrap gap-2">
+          <div>
+            <h1 className="text-xl md:text-3xl font-bold text-slate-800">📚 讀書規劃追蹤器</h1>
+            <p className="text-xs md:text-sm text-slate-500 mt-1">記錄每日讀書進度</p>
+          </div>
+          <div className="text-right">
+            <Button variant="ghost" onClick={resetAllData} className="text-red-500 hover:bg-red-50 text-xs px-2 py-1">🗑️ 重置</Button>
+            {savedTick && <p className="text-xs text-emerald-600 mt-1">✅ 已儲存</p>}
+          </div>
+        </div>
+ 
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
+          <Card><CardContent>
+            <span className="text-xs md:text-sm text-slate-500">📅 考試倒數</span>
+            <div className={"text-2xl md:text-3xl font-bold mt-2 " + examColor}>{examDaysLeft!==null ? examDaysLeft : '--'}</div>
+            <input type="date" value={examDate} onChange={e=>setExamDate(e.target.value)} className="mt-2 w-full border border-slate-300 rounded px-2 py-1 text-xs" />
+          </CardContent></Card>
+          <Card><CardContent>
+            <span className="text-xs md:text-sm text-slate-500">⏰ 總時數</span>
+            <div className="text-2xl md:text-3xl font-bold text-slate-800 mt-2">{Math.round(totalHours*10)/10}</div>
+          </CardContent></Card>
+          <Card><CardContent>
+            <span className="text-xs md:text-sm text-slate-500">✅ 讀書天數</span>
+            <div className="text-2xl md:text-3xl font-bold text-slate-800 mt-2">{totalStudyDays}</div>
+          </CardContent></Card>
+          <Card><CardContent>
+            <span className="text-xs md:text-sm text-slate-500">📈 近7天平均</span>
+            <div className="text-2xl md:text-3xl font-bold text-slate-800 mt-2">{Math.round(avgLast7*10)/10}</div>
+          </CardContent></Card>
+        </div>
+ 
+        <div className="flex gap-2 border-b border-slate-200 overflow-x-auto">
+          {[['subjects','科目管理'],['logs','讀書紀錄'],['charts','統計圖表']].map(([key,label]) => (
+            <button key={key} onClick={()=>setActiveTab(key)}
+              className={"px-3 md:px-4 py-2 text-xs md:text-sm font-medium border-b-2 -mb-px whitespace-nowrap " + (activeTab===key ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700")}>
+              {label}
+            </button>
+          ))}
+        </div>
+ 
+        {activeTab==='subjects' && (
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm md:text-base">{editingSubjectId ? '編輯考科' : '新增考科'}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-2 md:gap-3">
+                  <div><Label>科目名稱</Label><Input placeholder="例如：會計學" value={subjectName} onChange={e=>setSubjectName(e.target.value)} className="text-xs md:text-sm" /></div>
+                  <div><Label>總堂數</Label><Input type="number" min="1" placeholder="60" value={subjectTotal} onChange={e=>setSubjectTotal(e.target.value)} className="text-xs md:text-sm" /></div>
+                  <div><Label>目標日期</Label><Input type="date" value={subjectTarget} onChange={e=>setSubjectTarget(e.target.value)} className="text-xs md:text-sm" /></div>
+                  <div className="flex items-end gap-1 md:gap-2">
+                    <Button onClick={submitSubjectForm} className="w-full text-xs md:text-sm px-2 md:px-4 py-1 md:py-2">
+                      {editingSubjectId ? '💾' : '➕'}
+                    </Button>
+                    {editingSubjectId && <Button variant="ghost" onClick={cancelEditSubject} className="text-xs px-1 md:px-2">✕</Button>}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+ 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+              {subjectStats.map((s,i) => (
+                <Card key={s.id}>
+                  <CardContent>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 md:w-3 md:h-3 rounded-full inline-block" style={{backgroundColor: COLORS[i%COLORS.length]}} />
+                          <h3 className="font-semibold text-sm md:text-base text-slate-800">{s.name}</h3>
+                        </div>
+                        <p className="text-xs md:text-sm text-slate-500 mt-1">{s.completedLessons} / {s.totalLessons} 堂</p>
+                      </div>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" onClick={()=>startEditSubject(s)} className="text-xs px-1 md:px-2 py-1">✏️</Button>
+                        <Button variant="ghost" onClick={()=>deleteSubject(s.id)} className="text-xs px-1 md:px-2 py-1">🗑️</Button>
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <ProgressBar value={s.percent} />
+                      <p className="text-xs text-slate-500 mt-1">{s.percent}% 完成</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+ 
+        {activeTab==='logs' && (
+          <div className="space-y-3 md:space-y-4">
+            {subjects.length===0 ? (
+              <Card><CardContent><p className="text-xs md:text-sm text-amber-600 text-center py-8">請先新增考科</p></CardContent></Card>
+            ) : (
+              subjectStats.map(s => (
+                <PointCardSection
+                  key={s.id}
+                  subject={s}
+                  records={s.records}
+                  expanded={!collapsedIds.has(s.id)}
+                  onToggleExpand={() => toggleExpand(s.id)}
+                  onCellClick={(subjectId, lessonNumber) => setModalCell({ subjectId, lessonNumber })}
+                />
+              ))
+            )}
+          </div>
+        )}
+ 
+        {activeTab==='charts' && (
+          <div className="space-y-3 md:space-y-4">
+            <Card>
+              <CardHeader><CardTitle className="text-sm md:text-base">每日讀書時數趨勢</CardTitle></CardHeader>
+              <CardContent><LineChartSVG data={dailyTrend} /></CardContent>
+            </Card>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+              <Card>
+                <CardHeader><CardTitle className="text-sm md:text-base">各科目累計時數</CardTitle></CardHeader>
+                <CardContent><SubjectBarList data={pieData} colors={COLORS} /></CardContent>
+              </Card>
+              <Card>
+                <CardHeader><CardTitle className="text-sm md:text-base">時間分配比例</CardTitle></CardHeader>
+                <CardContent><PieChartSVG data={pieData} colors={COLORS} size={150} /></CardContent>
+              </Card>
+            </div>
+          </div>
+        )}
+      </div>
+ 
+      {modalCell && (() => {
+        const subj = subjects.find(s => s.id === modalCell.subjectId);
+        if(!subj) return null;
+        const rec = lessonRecords.find(r => r.subjectId === modalCell.subjectId && r.lessonNumber === modalCell.lessonNumber);
+        return (
+          <LessonModal
+            subject={subj}
+            lessonNumber={modalCell.lessonNumber}
+            record={rec}
+            onClose={() => setModalCell(null)}
+            onSave={(data) => saveLessonRecord(modalCell.subjectId, modalCell.lessonNumber, data)}
+            onRemove={() => removeLessonRecord(modalCell.subjectId, modalCell.lessonNumber)}
+          />
+        );
+      })()}
+    </div>
+  );
+}
+ 
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
